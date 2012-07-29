@@ -124,7 +124,7 @@ Handle<Value> DTRACE_NET_SERVER_CONNECTION(const Arguments& args) {
   HandleScope scope;
 
   SLURP_CONNECTION(args[0], conn);
-  NODE_NET_SERVER_CONNECTION(&conn);
+  NODE_NET_SERVER_CONNECTION(&conn, conn.remote, conn.port);
 
   return Undefined();
 }
@@ -136,7 +136,7 @@ Handle<Value> DTRACE_NET_STREAM_END(const Arguments& args) {
   HandleScope scope;
 
   SLURP_CONNECTION(args[0], conn);
-  NODE_NET_STREAM_END(&conn);
+  NODE_NET_STREAM_END(&conn, conn.remote, conn.port);
 
   return Undefined();
 }
@@ -157,7 +157,7 @@ Handle<Value> DTRACE_NET_SOCKET_READ(const Arguments& args) {
 
   nbytes = args[1]->Int32Value();
 
-  NODE_NET_SOCKET_READ(&conn, nbytes);
+  NODE_NET_SOCKET_READ(&conn, nbytes, conn.remote, conn.port);
 
   return Undefined();
 }
@@ -178,7 +178,7 @@ Handle<Value> DTRACE_NET_SOCKET_WRITE(const Arguments& args) {
 
   nbytes = args[1]->Int32Value();
 
-  NODE_NET_SOCKET_WRITE(&conn, nbytes);
+  NODE_NET_SOCKET_WRITE(&conn, nbytes, conn.remote, conn.port);
 
   return Undefined();
 }
@@ -213,7 +213,8 @@ Handle<Value> DTRACE_HTTP_SERVER_REQUEST(const Arguments& args) {
 
   SLURP_CONNECTION(args[1], conn);
 
-  NODE_HTTP_SERVER_REQUEST(&req, &conn);
+  NODE_HTTP_SERVER_REQUEST(&req, &conn, conn.remote, conn.port, req.method,
+    req.url);
   return Undefined();
 }
 
@@ -224,7 +225,7 @@ Handle<Value> DTRACE_HTTP_SERVER_RESPONSE(const Arguments& args) {
   HandleScope scope;
 
   SLURP_CONNECTION(args[0], conn);
-  NODE_HTTP_SERVER_RESPONSE(&conn);
+  NODE_HTTP_SERVER_RESPONSE(&conn, conn.remote, conn.port);
 
   return Undefined();
 }
@@ -263,7 +264,8 @@ Handle<Value> DTRACE_HTTP_CLIENT_REQUEST(const Arguments& args) {
   *header = '\0';
 
   SLURP_CONNECTION_HTTP_CLIENT(args[1], conn);
-  NODE_HTTP_CLIENT_REQUEST(&req, &conn);
+  NODE_HTTP_CLIENT_REQUEST(&req, &conn, conn.remote, conn.port, req.method,
+    req.url);
   return Undefined();
 }
 
@@ -274,7 +276,7 @@ Handle<Value> DTRACE_HTTP_CLIENT_RESPONSE(const Arguments& args) {
   HandleScope scope;
 
   SLURP_CONNECTION_HTTP_CLIENT_RESPONSE(args[0], args[1], conn);
-  NODE_HTTP_CLIENT_RESPONSE(&conn);
+  NODE_HTTP_CLIENT_RESPONSE(&conn, conn.remote, conn.port);
 
   return Undefined();
 }

@@ -347,12 +347,8 @@ def configure_node(o):
   # By default, enable DTrace on SunOS systems. Don't allow it on other
   # systems, since it won't work.  (The MacOS build process is different than
   # SunOS, and we haven't implemented it.)
-  if sys.platform.startswith('sunos'):
+  if sys.platform.startswith('sunos') or sys.platform.startswith('darwin'):
     o['variables']['node_use_dtrace'] = b(not options.without_dtrace)
-  elif b(options.with_dtrace) == 'true':
-    raise Exception('DTrace is currently only supported on SunOS systems.')
-  else:
-    o['variables']['node_use_dtrace'] = 'false'
 
   if options.no_ifaddrs:
     o['defines'] += ['SUNOS_NO_IFADDRS']
