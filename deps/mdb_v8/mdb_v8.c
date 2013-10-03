@@ -24,6 +24,14 @@
  * makes heavy use of metadata defined in the V8 binary for inspecting in-memory
  * structures.  Canned configurations can be manually loaded for V8 binaries
  * that predate this metadata.  See mdb_v8_cfg.c for details.
+ *
+ * NOTE: This dmod implementation (including this file and related headers and C
+ * files) exist in both the Node and illumos source trees.  THESE SHOULD BE KEPT
+ * IN SYNC.  The version in the Node tree is built directly into modern Node
+ * binaries as part of the build process, and the version in the illumos source
+ * tree is delivered with the OS for debugging Node binaries that predate
+ * support for including the dmod directly in the binary.  Note too that these
+ * files have different licenses to match their corresponding repositories.
  */
 
 /*
