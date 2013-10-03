@@ -180,6 +180,7 @@ static ssize_t V8_OFF_SCRIPT_LINE_ENDS;
 static ssize_t V8_OFF_SCRIPT_NAME;
 static ssize_t V8_OFF_SEQASCIISTR_CHARS;
 static ssize_t V8_OFF_SEQONEBYTESTR_CHARS;
+static ssize_t V8_OFF_SEQTWOBYTESTR_CHARS;
 static ssize_t V8_OFF_SHAREDFUNCTIONINFO_CODE;
 static ssize_t V8_OFF_SHAREDFUNCTIONINFO_FUNCTION_TOKEN_POSITION;
 static ssize_t V8_OFF_SHAREDFUNCTIONINFO_INFERRED_NAME;
@@ -339,6 +340,8 @@ static v8_offset_t v8_offsets[] = {
 	    "SeqAsciiString", "chars", B_TRUE },
 	{ &V8_OFF_SEQONEBYTESTR_CHARS,
 	    "SeqOneByteString", "chars", B_TRUE },
+	{ &V8_OFF_SEQTWOBYTESTR_CHARS,
+	    "SeqTwoByteString", "chars", B_TRUE },
 	{ &V8_OFF_SHAREDFUNCTIONINFO_CODE,
 	    "SharedFunctionInfo", "code" },
 	{ &V8_OFF_SHAREDFUNCTIONINFO_FUNCTION_TOKEN_POSITION,
@@ -515,6 +518,9 @@ again:
 
 	if (V8_OFF_SEQONEBYTESTR_CHARS != -1)
 		V8_OFF_SEQASCIISTR_CHARS = V8_OFF_SEQONEBYTESTR_CHARS;
+
+	if (V8_OFF_SEQTWOBYTESTR_CHARS == -1)
+		V8_OFF_SEQTWOBYTESTR_CHARS = V8_OFF_SEQASCIISTR_CHARS;
 
 	return (failed ? -1 : 0);
 }
@@ -795,6 +801,7 @@ conf_class_compute_offsets(v8_class_t *clp)
 #define	JSSTR_NUDE		JSSTR_NONE
 #define	JSSTR_VERBOSE		0x1
 #define	JSSTR_QUOTED		0x2
+#define	JSSTR_ISASCII		0x4
 
 static int jsstr_print(uintptr_t, uint_t, char **, size_t *);
 static boolean_t jsobj_is_undefined(uintptr_t addr);
@@ -1292,11 +1299,12 @@ obj_print_class(uintptr_t addr, v8_class_t *clp)
 }
 
 /*
- * Print the ASCII string for the given ASCII JS string, expanding ConsStrings
- * and ExternalStrings as needed.
+ * Print the ASCII string for the given JS string, expanding ConsStrings and
+ * ExternalStrings as needed.
  */
 static int jsstr_print_seq(uintptr_t, uint_t, char **, size_t *);
 static int jsstr_print_cons(uintptr_t, uint_t, char **, size_t *);
+static int jsstr_print_sliced(uintptr_t, uint_t, char **, size_t *);
 static int jsstr_print_external(uintptr_t, uint_t, char **, size_t *);
 
 static int
@@ -1317,11 +1325,6 @@ jsstr_print(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp)
 		return (0);
 	}
 
-	if (!V8_STRENC_ASCII(typebyte)) {
-		(void) bsnprintf(bufp, lenp, "<two-byte string>");
-		return (0);
-	}
-
 	if (verbose) {
 		lbufp = buf;
 		llen = sizeof (buf);
@@ -1329,6 +1332,11 @@ jsstr_print(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp)
 		mdb_printf("%s\n", buf);
 		(void) mdb_inc_indent(4);
 	}
+
+	if (V8_STRENC_ASCII(typebyte))
+		flags |= JSSTR_ISASCII;
+	else
+		flags &= ~JSSTR_ISASCII;
 
 	if (V8_STRREP_SEQ(typebyte))
 		err = jsstr_print_seq(addr, flags, bufp, lenp);
@@ -1355,35 +1363,64 @@ jsstr_print_seq(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp)
 	 * we'll allocate a buffer sized based on our input, making it at
 	 * least enough space for our ellipsis and at most 256K.
 	 */
-	uintptr_t len, rlen, blen = *lenp + sizeof ("[...]") + 1;
-	char *buf = alloca(MIN(blen, 256 * 1024));
+	uintptr_t i, nstrchrs, nreadbytes, blen, nstrbytes;
 	boolean_t verbose = flags & JSSTR_VERBOSE ? B_TRUE : B_FALSE;
 	boolean_t quoted = flags & JSSTR_QUOTED ? B_TRUE : B_FALSE;
+	char *buf;
+	uint16_t chrval;
 
-	if (read_heap_smi(&len, addr, V8_OFF_STRING_LENGTH) != 0)
+	blen = MIN(*lenp, 256 * 1024);
+	buf = alloca(blen);
+
+	if (read_heap_smi(&nstrchrs, addr, V8_OFF_STRING_LENGTH) != 0)
 		return (-1);
 
-	rlen = len <= blen - 1 ? len : blen - sizeof ("[...]");
+	nstrbytes = (flags & JSSTR_ISASCII) != 0 ? nstrchrs : 2 * nstrchrs;
+	nreadbytes = nstrbytes + sizeof ("\"\"") <= blen ? nstrbytes :
+	    blen - sizeof ("\"\"[...]");
 
 	if (verbose)
-		mdb_printf("length: %d, will read: %d\n", len, rlen);
+		mdb_printf("length: %d chars (%d bytes), will read: %d bytes\n",
+		    nstrchrs, nstrbytes, nreadbytes);
+
+	if (nstrbytes == 0) {
+		(void) bsnprintf(bufp, lenp, "%s%s",
+		    quoted ? "\"" : "", quoted ? "\"" : "");
+		return (0);
+	}
 
 	buf[0] = '\0';
 
-	if (rlen > 0 && mdb_readstr(buf, rlen + 1,
-	    addr + V8_OFF_SEQASCIISTR_CHARS) == -1) {
-		v8_warn("failed to read SeqString data");
-		return (-1);
+	if ((flags & JSSTR_ISASCII) != 0) {
+		if (mdb_readstr(buf, nreadbytes + 1,
+		    addr + V8_OFF_SEQASCIISTR_CHARS) == -1) {
+			v8_warn("failed to read SeqString data");
+			return (-1);
+		}
+
+		if (nreadbytes != nstrbytes)
+			(void) strlcat(buf, "[...]", blen);
+
+		(void) bsnprintf(bufp, lenp, "%s%s%s",
+		    quoted ? "\"" : "", buf, quoted ? "\"" : "");
+	} else {
+		if (mdb_readstr(buf, nreadbytes,
+		    addr + V8_OFF_SEQTWOBYTESTR_CHARS) == -1) {
+			v8_warn("failed to read SeqTwoByteString data");
+			return (-1);
+		}
+
+		(void) bsnprintf(bufp, lenp, "%s", quoted ? "\"" : "");
+		for (i = 0; i < nreadbytes; i += 2) {
+			chrval = *((uint16_t *)(buf + i));
+			(void) bsnprintf(bufp, lenp, "%c",
+			    (isascii(chrval) || chrval == 0) ?
+			    (char)chrval : '?');
+		}
+		if (nreadbytes != nstrbytes)
+			(void) bsnprintf(bufp, lenp, "[...]");
+		(void) bsnprintf(bufp, lenp, "%s", quoted ? "\"" : "");
 	}
-
-	if (rlen != len)
-		(void) strlcat(buf, "[...]", blen);
-
-	if (verbose)
-		mdb_printf("value: \"%s\"\n", buf);
-
-	(void) bsnprintf(bufp, lenp, "%s%s%s",
-	    quoted ? "\"" : "", buf, quoted ? "\"" : "");
 
 	return (0);
 }
@@ -1420,13 +1457,17 @@ jsstr_print_cons(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp)
 }
 
 static int
-jsstr_print_external(uintptr_t addr, uint_t flags, char **bufp,
-    size_t *lenp)
+jsstr_print_external(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp)
 {
 	uintptr_t ptr1, ptr2;
 	size_t blen = *lenp + 1;
 	char *buf = alloca(blen);
 	boolean_t quoted = flags & JSSTR_QUOTED ? B_TRUE : B_FALSE;
+
+	if ((flags & JSSTR_ISASCII) == 0) {
+	        (void) bsnprintf(bufp, lenp, "<external two-byte string>");
+	        return (0);
+	}
 
 	if (flags & JSSTR_VERBOSE)
 		mdb_printf("assuming Node.js string\n");
