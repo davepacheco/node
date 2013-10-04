@@ -578,7 +578,7 @@ dtrace:helper:ustack:
 	 */
 	APPEND_CHR4(' ','p','o','s');
 	APPEND_CHR(' ');
-	APPEND_NUM(this->position / 2);
+	APPEND_NUM(SMI_VALUE(this->position));
 	APPEND_CHR('\0');
 	this->done = 1;
 	stringof(this->buf);
