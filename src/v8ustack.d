@@ -31,6 +31,9 @@
 #define	V8_MAP_PTR(ptr)		\
     ((ptr & ~V8_HeapObjectTagMask) | V8_HeapObjectTag)
 
+#define V8_TYPE_SCRIPT(type) \
+    ((type) == V8_IT_SCRIPT)
+
 /*
  * Determine the encoding and representation of a V8 string.
  */
@@ -373,6 +376,7 @@ dtrace:helper:ustack:
 	this->funcnamelen = 0;
 	this->funcnameattrs = 0;
 	this->script = (off_t) 0;
+	this->scriptattrs = 0;
 	this->scriptnamestr = (off_t) 0;
 	this->scriptnamelen = 0;
 	this->scriptnameattrs = 0;
@@ -466,6 +470,16 @@ dtrace:helper:ustack:
 	stringof(this->buf);
 }
 
+dtrace:helper:ustack:
+/!this->done && IS_SMI(this->marker) &&
+ SMI_VALUE(this->marker) == V8_FT_STUB/
+{
+	this->done = 1;
+	APPEND_CHR8('<','<',' ','s','t','u','b',' ');
+	APPEND_CHR4('>','\0','\0','\0');
+	stringof(this->buf);
+}
+
 /*
  * Now check for internal frames that we can only identify by seeing that
  * there's a Code object where there would be a JSFunction object for a
@@ -534,17 +548,24 @@ dtrace:helper:ustack:
 APPEND_V8STR(this->funcnamestr, this->funcnamelen, this->funcnameattrs)
 
 /*
- * Now look for the name of the script where the function was defined.
+ * Now look for the name of the script where the function was defined.  The
+ * "script" itself may be undefined for special functions like "RegExp".
  */
 dtrace:helper:ustack:
 /!this->done/
 {
 	this->script = COPYIN_PTR(this->shared + V8_OFF_SHARED_SCRIPT);
+	this->map = V8_MAP_PTR(COPYIN_PTR(this->script + V8_OFF_HEAPOBJ_MAP));
+	this->scriptattrs = COPYIN_UINT8(this->map + V8_OFF_MAP_ATTRS);
+	APPEND_CHR4(' ','a','t',' ');
+}
+
+dtrace:helper:ustack:
+/!this->done && V8_TYPE_SCRIPT(this->scriptattrs)/
+{
 	this->scriptnamestr = COPYIN_PTR(this->script + V8_OFF_SCRIPT_NAME);
 	LOAD_STRFIELDS(this->scriptnamestr, this->scriptnamelen,
 	    this->scriptnameattrs);
-
-	APPEND_CHR4(' ','a','t',' ');
 }
 
 dtrace:helper:ustack:
@@ -566,6 +587,14 @@ dtrace:helper:ustack:
 	this->line_ends = COPYIN_PTR(this->script + V8_OFF_SCRIPT_LENDS);
 	this->map = V8_MAP_PTR(COPYIN_PTR(this->line_ends + V8_OFF_HEAPOBJ_MAP));
 	this->le_attrs = COPYIN_UINT8(this->map + V8_OFF_MAP_ATTRS);
+}
+
+dtrace:helper:ustack:
+/!this->done && this->le_attrs != V8_IT_FIXEDARRAY && this->position == 0/
+{
+	APPEND_CHR('\0');
+	this->done = 1;
+	stringof(this->buf);
 }
 
 dtrace:helper:ustack:
