@@ -60,7 +60,7 @@
     (V8_TYPE_STRING(value) && !V8_STRENC_ASCII(value) && V8_STRREP_SEQ(value))
 
 #define	IS_CONSSTR(value)	\
-    (V8_TYPE_STRING(value) && V8_STRENC_ASCII(value) && V8_STRREP_CONS(value))
+    (V8_TYPE_STRING(value) && V8_STRREP_CONS(value))
 
 #define	ASCII_EXTSTR(value)	\
     (V8_TYPE_STRING(value) && V8_STRENC_ASCII(value) && V8_STRREP_EXT(value))
@@ -557,7 +557,6 @@ dtrace:helper:ustack:
 	this->script = COPYIN_PTR(this->shared + V8_OFF_SHARED_SCRIPT);
 	this->map = V8_MAP_PTR(COPYIN_PTR(this->script + V8_OFF_HEAPOBJ_MAP));
 	this->scriptattrs = COPYIN_UINT8(this->map + V8_OFF_MAP_ATTRS);
-	APPEND_CHR4(' ','a','t',' ');
 }
 
 dtrace:helper:ustack:
@@ -569,10 +568,9 @@ dtrace:helper:ustack:
 }
 
 dtrace:helper:ustack:
-/!this->done && this->scriptnamelen == 0/
+/!this->done && this->scriptnamelen != 0/
 {
-	APPEND_CHR8('<','u','n','k','n','o','w','n');
-	APPEND_CHR('>');
+	APPEND_CHR4(' ','a','t',' ');
 }
 
 APPEND_V8STR(this->scriptnamestr, this->scriptnamelen, this->scriptnameattrs)
