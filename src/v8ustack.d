@@ -476,7 +476,7 @@ dtrace:helper:ustack:
 {
 	this->done = 1;
 	APPEND_CHR8('<','<',' ','s','t','u','b',' ');
-	APPEND_CHR4('>','\0','\0','\0');
+	APPEND_CHR4('>','>','\0','\0');
 	stringof(this->buf);
 }
 
