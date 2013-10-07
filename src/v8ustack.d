@@ -560,7 +560,16 @@ dtrace:helper:ustack:
 }
 
 dtrace:helper:ustack:
-/!this->done && V8_TYPE_SCRIPT(this->scriptattrs)/
+/!this->done && !V8_TYPE_SCRIPT(this->scriptattrs)/
+{
+	APPEND_CHR('\0');
+	this->done = 1;
+	stringof(this->buf);
+}
+
+
+dtrace:helper:ustack:
+/!this->done/
 {
 	this->scriptnamestr = COPYIN_PTR(this->script + V8_OFF_SCRIPT_NAME);
 	LOAD_STRFIELDS(this->scriptnamestr, this->scriptnamelen,
