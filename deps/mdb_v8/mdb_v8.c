@@ -160,6 +160,7 @@ static intptr_t	V8_TRANSITIONS_IDX_DESC;
 
 static intptr_t V8_TYPE_ACCESSORINFO = -1;
 static intptr_t V8_TYPE_ACCESSORPAIR = -1;
+static intptr_t V8_TYPE_EXECUTABLEACCESSORINFO = -1;
 static intptr_t V8_TYPE_JSOBJECT = -1;
 static intptr_t V8_TYPE_JSARRAY = -1;
 static intptr_t V8_TYPE_JSFUNCTION = -1;
@@ -600,6 +601,9 @@ autoconfigure(v8_cfg_t *cfgp)
 		if (strcmp(ep->v8e_name, "AccessorPair") == 0)
 			V8_TYPE_ACCESSORPAIR = ep->v8e_value;
 
+		if (strcmp(ep->v8e_name, "ExecutableAccessorInfo") == 0)
+			V8_TYPE_EXECUTABLEACCESSORINFO = ep->v8e_value;
+
 		if (strcmp(ep->v8e_name, "HeapNumber") == 0)
 			V8_TYPE_HEAPNUMBER = ep->v8e_value;
 
@@ -631,16 +635,11 @@ autoconfigure(v8_cfg_t *cfgp)
 	}
 
 	/*
-	 * It's non-fatal if we can't find AccessorInfo, AccessorPair,
-	 * HeapNumber, JSDate, or Oddball because they're only used for
-	 * heuristics.
+	 * It's non-fatal if we can't find HeapNumber, JSDate, or Oddball
+	 * because they're only used for heuristics.  It's not even a warning if
+	 * we don't find the Accessor-related fields for the same reason, and
+	 * they change too much to even bother warning.
 	 */
-	if (V8_TYPE_ACCESSORINFO == -1)
-		mdb_warn("couldn't find AccessorInfo type\n");
-
-	if (V8_TYPE_ACCESSORPAIR == -1)
-		mdb_warn("couldn't find AccessorInfo type\n");
-
 	if (V8_TYPE_HEAPNUMBER == -1)
 		mdb_warn("couldn't find HeapNumber type\n");
 
@@ -2061,6 +2060,7 @@ jsobj_maybe_garbage(uintptr_t addr)
 	    (!V8_TYPE_STRING(type) &&
 	    type != V8_TYPE_ACCESSORINFO &&
 	    type != V8_TYPE_ACCESSORPAIR &&
+	    type != V8_TYPE_EXECUTABLEACCESSORINFO &&
 	    type != V8_TYPE_HEAPNUMBER &&
 	    type != V8_TYPE_ODDBALL &&
 	    type != V8_TYPE_JSOBJECT &&
