@@ -158,9 +158,14 @@ static intptr_t	V8_PROP_DESC_VALUE;
 static intptr_t	V8_PROP_DESC_SIZE;
 static intptr_t	V8_TRANSITIONS_IDX_DESC;
 
+static intptr_t V8_TYPE_ACCESSORINFO = -1;
+static intptr_t V8_TYPE_ACCESSORPAIR = -1;
 static intptr_t V8_TYPE_JSOBJECT = -1;
 static intptr_t V8_TYPE_JSARRAY = -1;
 static intptr_t V8_TYPE_JSFUNCTION = -1;
+static intptr_t V8_TYPE_JSDATE = -1;
+static intptr_t V8_TYPE_HEAPNUMBER = -1;
+static intptr_t V8_TYPE_ODDBALL = -1;
 static intptr_t V8_TYPE_FIXEDARRAY = -1;
 
 static intptr_t V8_ELEMENTS_KIND_SHIFT;
@@ -463,6 +468,8 @@ typedef enum {
 	/* error-like cases */
 	JPI_SKIPPED   = 0x10,	/* some properties were skipped */
 	JPI_BADLAYOUT = 0x20,	/* we didn't recognize the layout at all */
+	JPI_BADPROPS  = 0x40,	/* property values don't look valid */
+	JPI_MAYBE_GARBAGE = (JPI_SKIPPED | JPI_BADLAYOUT | JPI_BADPROPS),
 
 	/* fallback cases */
 	JPI_HASTRANSITIONS	= 0x100, /* found a transitions array */
@@ -586,6 +593,21 @@ autoconfigure(v8_cfg_t *cfgp)
 
 		if (strcmp(ep->v8e_name, "FixedArray") == 0)
 			V8_TYPE_FIXEDARRAY = ep->v8e_value;
+
+		if (strcmp(ep->v8e_name, "AccessorInfo") == 0)
+			V8_TYPE_ACCESSORINFO = ep->v8e_value;
+
+		if (strcmp(ep->v8e_name, "AccessorPair") == 0)
+			V8_TYPE_ACCESSORPAIR = ep->v8e_value;
+
+		if (strcmp(ep->v8e_name, "HeapNumber") == 0)
+			V8_TYPE_HEAPNUMBER = ep->v8e_value;
+
+		if (strcmp(ep->v8e_name, "JSDate") == 0)
+			V8_TYPE_JSDATE = ep->v8e_value;
+
+		if (strcmp(ep->v8e_name, "Oddball") == 0)
+			V8_TYPE_ODDBALL = ep->v8e_value;
 	}
 
 	if (V8_TYPE_JSOBJECT == -1) {
@@ -607,6 +629,26 @@ autoconfigure(v8_cfg_t *cfgp)
 		mdb_warn("couldn't find FixedArray type\n");
 		failed++;
 	}
+
+	/*
+	 * It's non-fatal if we can't find AccessorInfo, AccessorPair,
+	 * HeapNumber, JSDate, or Oddball because they're only used for
+	 * heuristics.
+	 */
+	if (V8_TYPE_ACCESSORINFO == -1)
+		mdb_warn("couldn't find AccessorInfo type\n");
+
+	if (V8_TYPE_ACCESSORPAIR == -1)
+		mdb_warn("couldn't find AccessorInfo type\n");
+
+	if (V8_TYPE_HEAPNUMBER == -1)
+		mdb_warn("couldn't find HeapNumber type\n");
+
+	if (V8_TYPE_JSDATE == -1)
+		mdb_warn("couldn't find JSDate type\n");
+
+	if (V8_TYPE_ODDBALL == -1)
+		mdb_warn("couldn't find Oddball type\n");
 
 	/*
 	 * Finally, load various class offsets.
@@ -958,6 +1000,7 @@ conf_class_compute_offsets(v8_class_t *clp)
 static int jsstr_print(uintptr_t, uint_t, char **, size_t *);
 static boolean_t jsobj_is_undefined(uintptr_t addr);
 static boolean_t jsobj_is_hole(uintptr_t addr);
+static boolean_t jsobj_maybe_garbage(uintptr_t addr);
 
 static const char *
 enum_lookup_str(v8_enum_t *enums, int val, const char *dflt)
@@ -1283,7 +1326,8 @@ read_size(size_t *valp, uintptr_t addr)
  */
 static int
 read_heap_dict(uintptr_t addr,
-    int (*func)(const char *, uintptr_t, void *), void *arg)
+    int (*func)(const char *, uintptr_t, void *), void *arg,
+    jspropinfo_t *propinfo)
 {
 	uint8_t type;
 	uintptr_t len;
@@ -1334,6 +1378,9 @@ read_heap_dict(uintptr_t addr,
 			if (jsstr_print(dict[i], JSSTR_NUDE, &bufp, &len) != 0)
 				goto out;
 		}
+
+		if (propinfo != NULL && jsobj_maybe_garbage(dict[i + 1]))
+			*propinfo |= JPI_BADPROPS;
 
 		if (func(buf, dict[i + 1], arg) == -1)
 			goto out;
@@ -1998,6 +2045,31 @@ jsobj_is_hole(uintptr_t addr)
 }
 
 /*
+ * Returns true if the value at "addr" appears to be invalid (as an object that
+ * has been partially garbage-collected).  This heuristic only eliminates heap
+ * objects with types that are not types printable by obj_jsprint().  We also
+ * avoid marking accessors as garbage, even though obj_jsprint() doesn't support
+ * them.
+ */
+static boolean_t
+jsobj_maybe_garbage(uintptr_t addr)
+{
+	uint8_t type;
+
+	return (!V8_IS_SMI(addr) &&
+	    (read_typebyte(&type, addr) != 0 ||
+	    (!V8_TYPE_STRING(type) &&
+	    type != V8_TYPE_ACCESSORINFO &&
+	    type != V8_TYPE_ACCESSORPAIR &&
+	    type != V8_TYPE_HEAPNUMBER &&
+	    type != V8_TYPE_ODDBALL &&
+	    type != V8_TYPE_JSOBJECT &&
+	    type != V8_TYPE_JSARRAY &&
+	    type != V8_TYPE_JSFUNCTION &&
+	    type != V8_TYPE_JSDATE)));
+}
+
+/*
  * Iterate the properties of a JavaScript object "addr".
  *
  * Every heap object refers to a Map that describes how that heap object is laid
@@ -2188,6 +2260,14 @@ jsobj_properties(uintptr_t addr,
 
 				snprintf(name, sizeof (name), "%" PRIdPTR, ii);
 
+				/*
+				 * If the property value doesn't look like a
+				 * valid JavaScript object, mark this object as
+				 * dubious.
+				 */
+				if (jsobj_maybe_garbage(elts[ii]))
+					propinfo |= JPI_BADPROPS;
+
 				if (func(name, elts[ii], arg) != 0) {
 					mdb_free(elts, sz);
 					goto err;
@@ -2195,7 +2275,8 @@ jsobj_properties(uintptr_t addr,
 			}
 		} else if (kind == V8_ELEMENTS_DICTIONARY_ELEMENTS) {
 			propinfo |= JPI_DICT;
-			if (read_heap_dict(elements, func, arg) != 0) {
+			if (read_heap_dict(elements, func, arg,
+			    &propinfo) != 0) {
 				mdb_free(elts, sz);
 				goto err;
 			}
@@ -2246,7 +2327,7 @@ jsobj_properties(uintptr_t addr,
 			propinfo |= JPI_DICT;
 			if (propinfop != NULL)
 				*propinfop = propinfo;
-			return (read_heap_dict(ptr, func, arg));
+			return (read_heap_dict(ptr, func, arg, propinfop));
 		}
 	} else if (V8_OFF_MAP_INSTANCE_DESCRIPTORS != -1) {
 		uintptr_t bit_field3;
@@ -2270,7 +2351,7 @@ jsobj_properties(uintptr_t addr,
 			propinfo |= JPI_DICT;
 			if (propinfop != NULL)
 				*propinfop = propinfo;
-			return (read_heap_dict(ptr, func, arg));
+			return (read_heap_dict(ptr, func, arg, propinfop));
 		}
 	}
 
@@ -2484,6 +2565,13 @@ jsobj_properties(uintptr_t addr,
 			propinfo |= JPI_PROPS;
 			ptr = props[val];
 		}
+
+		/*
+		 * If the property value doesn't look like a valid JavaScript
+		 * object, mark this object as dubious.
+		 */
+		if (jsobj_maybe_garbage(ptr))
+			propinfo |= JPI_BADPROPS;
 
 		if (func(buf, ptr, arg) != 0)
 			goto err;
@@ -3118,17 +3206,25 @@ jsobj_print_jsdate(uintptr_t addr, jsobj_print_t *jsop)
 		return (-1);
 	}
 
-	if (read_typebyte(&type, value) != 0) {
-		(void) bsnprintf(bufp, lenp, "<JSDate (failed to read type)>");
-		return (-1);
-	}
+	if (V8_IS_SMI(value)) {
+		numval = V8_SMI_VALUE(value);
+	} else {
+		if (read_typebyte(&type, value) != 0) {
+			(void) bsnprintf(bufp, lenp,
+			    "<JSDate (failed to read type)>");
+			return (-1);
+		}
 
-	if (strcmp(enum_lookup_str(v8_types, type, ""), "HeapNumber") != 0)
-		return (-1);
+		if (strcmp(enum_lookup_str(v8_types, type, ""),
+		    "HeapNumber") != 0)
+			return (-1);
 
-	if (read_heap_double(&numval, value, V8_OFF_HEAPNUMBER_VALUE) == -1) {
-		(void) bsnprintf(bufp, lenp, "<JSDate (failed to read num)>");
-		return (-1);
+		if (read_heap_double(&numval, value,
+		    V8_OFF_HEAPNUMBER_VALUE) == -1) {
+			(void) bsnprintf(bufp, lenp,
+			    "<JSDate (failed to read num)>");
+			return (-1);
+		}
 	}
 
 	mdb_snprintf(buf, sizeof (buf), "%Y",
@@ -3787,6 +3883,7 @@ typedef struct findjsobjects_stats {
 	int fjss_typereads;
 	int fjss_jsobjs;
 	int fjss_objects;
+	int fjss_garbage;
 	int fjss_arrays;
 	int fjss_uniques;
 	int fjss_funcs;
@@ -3860,6 +3957,12 @@ findjsobjects_cmp(findjsobjects_obj_t *lhs, findjsobjects_obj_t *rhs)
 {
 	findjsobjects_prop_t *lprop, *rprop;
 	int rv;
+
+	/*
+	 * Don't group malformed objects with normal ones or vice versa.
+	 */
+	if (lhs->fjso_malformed != rhs->fjso_malformed)
+		return (lhs->fjso_malformed ? -1 : 1);
 
 	lprop = lhs->fjso_props;
 	rprop = rhs->fjso_props;
@@ -3987,7 +4090,7 @@ findjsobjects_constructor(findjsobjects_obj_t *obj)
 	if (read_typebyte(&type, addr) != 0)
 		goto out;
 
-	if (strcmp(enum_lookup_str(v8_types, type, ""), "JSFunction") != 0)
+	if (type != V8_TYPE_JSFUNCTION)
 		goto out;
 
 	if (read_heap_ptr(&funcinfop, addr, V8_OFF_JSFUNCTION_SHARED) != 0)
@@ -4129,6 +4232,12 @@ findjsobjects_range(findjsobjects_state_t *fjs, uintptr_t addr, uintptr_t size)
 				findjsobjects_free(fjs->fjs_current);
 				fjs->fjs_current = NULL;
 				continue;
+			}
+
+			if ((fjs->fjs_current->fjso_propinfo &
+			    (JPI_MAYBE_GARBAGE)) != 0) {
+				stats->fjss_garbage++;
+				fjs->fjs_current->fjso_malformed = B_TRUE;
 			}
 
 			findjsobjects_constructor(fjs->fjs_current);
@@ -4432,6 +4541,7 @@ findjsobjects_match_kind(findjsobjects_obj_t *obj, const char *propkind)
 	    ((p & JPI_HASCONTENT) != 0 &&
 	    strstr(propkind, "content") != NULL) ||
 	    ((p & JPI_SKIPPED) != 0 && strstr(propkind, "skipped") != NULL) ||
+	    ((p & JPI_BADPROPS) != 0 && strstr(propkind, "badprop") != NULL) ||
 	    ((p & JPI_BADLAYOUT) != 0 &&
 	    strstr(propkind, "badlayout") != NULL)) {
 		mdb_printf("%p\n", obj->fjso_instances.fjsi_addr);
@@ -4627,6 +4737,7 @@ findjsobjects_run(findjsobjects_state_t *fjs)
 			mdb_printf(f, "cached reads", stats->fjss_cached);
 			mdb_printf(f, "JavaScript objects", stats->fjss_jsobjs);
 			mdb_printf(f, "processed objects", stats->fjss_objects);
+			mdb_printf(f, "possible garbage", stats->fjss_garbage);
 			mdb_printf(f, "processed arrays", stats->fjss_arrays);
 			mdb_printf(f, "unique objects", stats->fjss_uniques);
 			mdb_printf(f, "functions found", stats->fjss_funcs);
@@ -4934,6 +5045,8 @@ jsobj_print_propinfo(jspropinfo_t propinfo)
 		    "some properties skipped due to unexpected layout\n");
 	if ((propinfo & JPI_BADLAYOUT) != 0)
 		mdb_printf("object has unexpected layout\n");
+	if ((propinfo & JPI_BADPROPS) != 0)
+		mdb_printf("object has invalid-looking property values\n");
 }
 
 /* ARGSUSED */
