@@ -2439,7 +2439,7 @@ jsobj_properties(uintptr_t addr,
 	 * of instance descriptors.
 	 */
 	for (ii = 0; ii < rndescs; ii++) {
-		uintptr_t keyidx, validx, detidx, baseidx;
+		intptr_t keyidx, validx, detidx, baseidx, propaddr, propidx;
 		char buf[1024];
 		intptr_t val;
 		size_t len = sizeof (buf);
@@ -2503,37 +2503,60 @@ jsobj_properties(uintptr_t addr,
 		}
 
 		/*
-		 * The "value" part of each property descriptor tells us whether
-		 * the property value is stored directly in the object or in the
-		 * related "props" array.  See JSObject::RawFastPropertyAt() in
-		 * the V8 source.
+		 * There are two possibilities at this point: the property may
+		 * be stored directly inside the object (like a C struct), or it
+		 * may be stored inside the attached "properties" array.  The
+		 * details vary whether we're looking at the V8 bundled with
+		 * v0.10 or v0.12.  The specific V8 version affects not only how
+		 * to tell which kind of property is used, but also how to
+		 * compute the in-object address from the information available.
 		 */
-		val = V8_SMI_VALUE(val) - ninprops;
-		if (val < 0) {
-			uintptr_t propaddr;
-
+		propaddr = 0;
+		ptr = 0;
+		if (v8_major > 3 || (v8_major == 3 && v8_minor >= 26)) {
 			/*
-			 * The property is stored directly inside the object.
-			 * In Node 0.10, "val - ninprops" is the (negative)
-			 * index of the property counted from the end of the
-			 * object.  In that context, -1 refers to the last
-			 * word in the object; -2 refers to the second-last
-			 * word, and so on.
-			 *
-			 * In Node 0.12, we get the 0-based index from the
-			 * first property inside the object by reading certain
-			 * bits from the property descriptor details word.
-			 * These constants are literal here because they're
-			 * literal in the V8 source itself.
+			 * In Node v0.12, the property's 0-based index is stored
+			 * in a bitfield in the "property details" word.  These
+			 * constants are literal here because they're literal in
+			 * the V8 source itself.  We use the heuristic that if
+			 * the property index refers to something obviously not
+			 * in the object, then it must be part of the
+			 * "properties" array.
 			 */
-			if (v8_major > 3 || (v8_major == 3 && v8_minor >= 26)) {
-				val = V8_PROP_FIELDINDEX(content[detidx]);
+			propidx = V8_PROP_FIELDINDEX(content[detidx]);
+			if (propidx < ninprops) {
+				/* The property is stored inside the object. */
 				propaddr = addr + V8_OFF_HEAP(
-				    size - (ninprops - val) * ps);
-			} else {
-				propaddr = addr + V8_OFF_HEAP(size + val * ps);
+				    size - (ninprops - propidx) * ps);
 			}
+		} else {
+			/*
+			 * In v0.10 and earlier, the "value" part of each
+			 * property descriptor tells us whether the property
+			 * value is stored directly in the object or in the
+			 * related "props" array.  See
+			 * JSObject::RawFastPropertyAt() in the V8 source.
+			 */
+			propidx = V8_SMI_VALUE(val) - ninprops;
+			if (propidx < 0) {
+				/*
+				 * The property is stored directly inside the
+				 * object.  In Node 0.10, "val - ninprops" is
+				 * the (negative) index of the property counted
+				 * from the end of the object.  In that context,
+				 * -1 refers to the last word in the object; -2
+				 * refers to the second-last word, and so on.
+				 */
+				propaddr = addr + V8_OFF_HEAP(size + propidx * ps);
+			}
+		}
 
+		/*
+		 * Now that we've figured out what kind of property it is and
+		 * where it's located, read the value into "ptr".
+		 */
+		if (propaddr != 0) {
+			/* This is an in-object property. */
 			if (mdb_vread(&ptr, sizeof (ptr), propaddr) == -1) {
 				propinfo |= JPI_SKIPPED;
 				v8_warn("object %p: failed to read in-object "
@@ -2542,28 +2565,25 @@ jsobj_properties(uintptr_t addr,
 			}
 
 			propinfo |= JPI_INOBJECT;
+		} else if (propidx >= 0 && propidx < nprops) {
+			/* Valid "properties" array property found. */
+			ptr = props[propidx];
+			propinfo |= JPI_PROPS;
 		} else {
 			/*
-			 * The property is in the separate "props" array.
+			 * Invalid "properties" array property found.  This can
+			 * happen when properties are deleted.  If this value
+			 * isn't obviously corrupt, we'll just silently ignore
+			 * it.
 			 */
-			if (val >= nprops) {
-				/*
-				 * This can happen when properties are deleted.
-				 * If this value isn't obviously corrupt, we'll
-				 * just silently ignore it.
-				 */
-				if (val < rndescs)
-					continue;
+			if (propidx < rndescs)
+				continue;
 
-				propinfo |= JPI_SKIPPED;
-				v8_warn("object %p: property descriptor %d: "
-				    "value index value (%d) out of bounds "
-				    "(%d)\n", addr, ii, val, nprops);
-				goto err;
-			}
-
-			propinfo |= JPI_PROPS;
-			ptr = props[val];
+			propinfo |= JPI_SKIPPED;
+			v8_warn("object %p: property descriptor %d: "
+			    "value index value (%d) out of bounds "
+			    "(%d)\n", addr, ii, val, nprops);
+			goto err;
 		}
 
 		/*

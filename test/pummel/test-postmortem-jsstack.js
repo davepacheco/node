@@ -38,11 +38,11 @@ var expected;
 
 var stalloogle = function (str) {
   expected = str;
-  os.loadavg();
+  return 1 + os.loadavg();
 };
 
 var bagnoogle = function (arg0, arg1) {
-  stalloogle(arg0 + ' is ' + arg1 + ' except that it is read-only');
+  return 1 + stalloogle(arg0 + ' is ' + arg1 + ' except that it is read-only');
 };
 
 var done = false;
@@ -51,7 +51,7 @@ var doogle = function () {
   if (!done)
     setTimeout(doogle, 10);
 
-  bagnoogle('The bfs command', '(almost) like ed(1)');
+  return 1 + bagnoogle('The bfs command', '(almost) like ed(1)');
 };
 
 var spawn = require('child_process').spawn;
