@@ -2547,7 +2547,8 @@ jsobj_properties(uintptr_t addr,
 				 * -1 refers to the last word in the object; -2
 				 * refers to the second-last word, and so on.
 				 */
-				propaddr = addr + V8_OFF_HEAP(size + propidx * ps);
+				propaddr = addr +
+				    V8_OFF_HEAP(size + propidx * ps);
 			}
 		}
 
