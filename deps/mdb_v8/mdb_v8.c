@@ -2494,14 +2494,6 @@ jsobj_properties(uintptr_t addr,
 			continue;
 		}
 
-		val = (intptr_t)content[validx];
-		if (!V8_IS_SMI(val)) {
-			propinfo |= JPI_SKIPPED;
-			v8_warn("object %p: property descriptor %d: value "
-			    "index is not an SMI: %p\n", addr, ii, val);
-			continue;
-		}
-
 		/*
 		 * There are two possibilities at this point: the property may
 		 * be stored directly inside the object (like a C struct), or it
@@ -2537,6 +2529,15 @@ jsobj_properties(uintptr_t addr,
 			 * related "props" array.  See
 			 * JSObject::RawFastPropertyAt() in the V8 source.
 			 */
+			val = (intptr_t)content[validx];
+			if (!V8_IS_SMI(val)) {
+				propinfo |= JPI_SKIPPED;
+				v8_warn("object %p: property descriptor %d: "
+				    "value index is not an SMI: %p\n", addr,
+				    ii, val);
+				continue;
+			}
+
 			propidx = V8_SMI_VALUE(val) - ninprops;
 			if (propidx < 0) {
 				/*
@@ -2582,8 +2583,8 @@ jsobj_properties(uintptr_t addr,
 
 			propinfo |= JPI_SKIPPED;
 			v8_warn("object %p: property descriptor %d: "
-			    "value index value (%d) out of bounds "
-			    "(%d)\n", addr, ii, val, nprops);
+			    "value index value out of bounds (%d)\n",
+			    addr, ii, nprops);
 			goto err;
 		}
 
