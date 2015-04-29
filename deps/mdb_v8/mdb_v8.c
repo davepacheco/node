@@ -487,6 +487,7 @@ typedef struct jsobj_print {
 	uintptr_t jsop_baseaddr;
 	int jsop_nprops;
 	const char *jsop_member;
+	size_t jsop_maxstrlen;
 	boolean_t jsop_found;
 	boolean_t jsop_descended;
 	jspropinfo_t jsop_propinfo;
@@ -1951,7 +1952,7 @@ static int
 jsstr_print_external(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp)
 {
 	uintptr_t ptr1, ptr2;
-	size_t blen = *lenp + 1;
+	size_t blen = MAX(1, (ssize_t)(*lenp) - 2);
 	char *buf;
 	boolean_t quoted = flags & JSSTR_QUOTED ? B_TRUE : B_FALSE;
 	int rval = -1;
@@ -2924,10 +2925,31 @@ jsobj_print(uintptr_t addr, jsobj_print_t *jsop)
 	}
 
 	if (V8_TYPE_STRING(type)) {
-		if (jsstr_print(addr, JSSTR_QUOTED, bufp, lenp) == -1)
-			return (-1);
+		size_t omax, maxstrlen;
+		int rv;
 
-		return (0);
+		/*
+		 * The undocumented -N option to ::jsprint puts an artificial
+		 * limit on the length of strings printed out.  We implement
+		 * this here by passing a smaller length to jsstr_print(), and
+		 * then updating the real buffer length to match.
+		 *
+		 * This is mainly intended for dmod developers, as when printing
+		 * out every object in a core file.  Many strings contain entire
+		 * source code files and are largely not interesting.
+		 */
+		if (jsop->jsop_maxstrlen == 0 ||
+		    jsop->jsop_maxstrlen >= *lenp) {
+			maxstrlen = *lenp;
+		} else {
+			maxstrlen = jsop->jsop_maxstrlen;
+		}
+
+		omax = maxstrlen;
+		rv = jsstr_print(addr, JSSTR_QUOTED, bufp, &maxstrlen);
+		assert(maxstrlen <= omax);
+		*lenp -= omax - maxstrlen;
+		return (rv);
 	}
 
 	klass = enum_lookup_str(v8_types, type, "<unknown>");
@@ -5107,6 +5129,7 @@ dcmd_jsprint(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	jsobj_print_t jsop;
 	boolean_t opt_b = B_FALSE;
 	boolean_t opt_v = B_FALSE;
+	uint64_t strlen_override = 0;
 	int rv, i;
 
 	bzero(&jsop, sizeof (jsop));
@@ -5117,7 +5140,10 @@ dcmd_jsprint(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    'a', MDB_OPT_SETBITS, B_TRUE, &jsop.jsop_printaddr,
 	    'b', MDB_OPT_SETBITS, B_TRUE, &opt_b,
 	    'd', MDB_OPT_UINT64, &jsop.jsop_depth,
+	    'N', MDB_OPT_UINT64, &strlen_override,
 	    'v', MDB_OPT_SETBITS, B_TRUE, &opt_v, NULL);
+
+	jsop.jsop_maxstrlen = (int)strlen_override;
 
 	if (opt_b)
 		jsop.jsop_baseaddr = addr;
