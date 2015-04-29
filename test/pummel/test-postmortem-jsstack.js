@@ -38,11 +38,15 @@ var expected;
 
 var stalloogle = function (str) {
   expected = str;
-  return 1 + os.loadavg();
+  os.loadavg();
+  /* Do something else to avoid tail call elimination. */
+  process.stderr.write('');
 };
 
 var bagnoogle = function (arg0, arg1) {
-  return 1 + stalloogle(arg0 + ' is ' + arg1 + ' except that it is read-only');
+  stalloogle(arg0 + ' is ' + arg1 + ' except that it is read-only');
+  /* Do something else to avoid tail call elimination. */
+  process.stderr.write('');
 };
 
 var done = false;
@@ -51,7 +55,9 @@ var doogle = function () {
   if (!done)
     setTimeout(doogle, 10);
 
-  return 1 + bagnoogle('The bfs command', '(almost) like ed(1)');
+  bagnoogle('The bfs command', '(almost) like ed(1)');
+  /* Do something else to avoid tail call elimination. */
+  process.stderr.write('');
 };
 
 var spawn = require('child_process').spawn;
