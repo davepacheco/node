@@ -471,6 +471,7 @@ typedef enum {
 	JPI_BADLAYOUT = 0x20,	/* we didn't recognize the layout at all */
 	JPI_BADPROPS  = 0x40,	/* property values don't look valid */
 	JPI_MAYBE_GARBAGE = (JPI_SKIPPED | JPI_BADLAYOUT | JPI_BADPROPS),
+	JPI_UNDEFPROPNAME = 0x80,	/* found "undefined" for prop name */
 
 	/* fallback cases */
 	JPI_HASTRANSITIONS	= 0x100, /* found a transitions array */
@@ -2490,7 +2491,22 @@ jsobj_properties(uintptr_t addr,
 		}
 
 		if (jsstr_print(descs[keyidx], JSSTR_NUDE, &c, &len) != 0) {
-			propinfo |= JPI_SKIPPED;
+			if (jsobj_is_undefined(descs[keyidx])) {
+				/*
+				 * In some cases, we've encountered objects that
+				 * look basically fine, but have a bunch of
+				 * extra "undefined" values in the instance
+				 * descriptors.  Just ignore these, but mark
+				 * them in case a developer wants to find them
+				 * later.
+				 */
+				propinfo |= JPI_UNDEFPROPNAME;
+			} else {
+				propinfo |= JPI_SKIPPED;
+				v8_warn("property descriptor %d: could not "
+				    "print %p as a string\n", ii,
+				    descs[keyidx]);
+			}
 			continue;
 		}
 
@@ -4563,6 +4579,8 @@ findjsobjects_match_kind(findjsobjects_obj_t *obj, const char *propkind)
 	    ((p & JPI_HASCONTENT) != 0 &&
 	    strstr(propkind, "content") != NULL) ||
 	    ((p & JPI_SKIPPED) != 0 && strstr(propkind, "skipped") != NULL) ||
+	    ((p & JPI_UNDEFPROPNAME) != 0 &&
+	    strstr(propkind, "undefpropname") != NULL) ||
 	    ((p & JPI_BADPROPS) != 0 && strstr(propkind, "badprop") != NULL) ||
 	    ((p & JPI_BADLAYOUT) != 0 &&
 	    strstr(propkind, "badlayout") != NULL)) {
@@ -5062,6 +5080,9 @@ jsobj_print_propinfo(jspropinfo_t propinfo)
 		mdb_printf("\n");
 	}
 
+	if ((propinfo & JPI_UNDEFPROPNAME) != 0)
+		mdb_printf(
+		    "some properties skipped due to undefined property name\n");
 	if ((propinfo & JPI_SKIPPED) != 0)
 		mdb_printf(
 		    "some properties skipped due to unexpected layout\n");
