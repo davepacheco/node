@@ -1772,11 +1772,17 @@ jsstr_print_seq(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp,
 		nreadoffset = sliceoffset;
 		nreadbytes = nstrbytes + sizeof ("\"\"") <= *lenp ?
 		    nstrbytes : *lenp - sizeof ("\"\"[...]");
+
+		if (nreadbytes > blen)
+			nreadbytes = blen - sizeof ("\"\"[...]");
 	} else {
 		nstrbytes = 2 * nstrchrs;
 		nreadoffset = 2 * sliceoffset;
 		nreadbytes = nstrchrs + sizeof ("\"\"") <= *lenp ?
 		    nstrbytes : 2 * (*lenp - sizeof ("\"\"[...]"));
+
+		if (nreadbytes > blen)
+			nreadbytes = blen - 2 * sizeof ("\"\"[...]");
 	}
 
 	if (nreadbytes < 0) {
