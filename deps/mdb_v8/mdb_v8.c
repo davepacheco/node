@@ -165,6 +165,7 @@ static intptr_t V8_TYPE_JSOBJECT = -1;
 static intptr_t V8_TYPE_JSARRAY = -1;
 static intptr_t V8_TYPE_JSFUNCTION = -1;
 static intptr_t V8_TYPE_JSDATE = -1;
+static intptr_t V8_TYPE_JSREGEXP = -1;
 static intptr_t V8_TYPE_HEAPNUMBER = -1;
 static intptr_t V8_TYPE_ODDBALL = -1;
 static intptr_t V8_TYPE_FIXEDARRAY = -1;
@@ -190,6 +191,7 @@ static ssize_t V8_OFF_HEAPNUMBER_VALUE;
 static ssize_t V8_OFF_HEAPOBJECT_MAP;
 static ssize_t V8_OFF_JSARRAY_LENGTH;
 static ssize_t V8_OFF_JSDATE_VALUE;
+static ssize_t V8_OFF_JSREGEXP_DATA;
 static ssize_t V8_OFF_JSFUNCTION_SHARED;
 static ssize_t V8_OFF_JSOBJECT_ELEMENTS;
 static ssize_t V8_OFF_JSOBJECT_PROPERTIES;
@@ -374,6 +376,8 @@ static v8_offset_t v8_offsets[] = {
 	    "JSObject", "elements" },
 	{ &V8_OFF_JSOBJECT_PROPERTIES,
 	    "JSObject", "properties" },
+	{ &V8_OFF_JSREGEXP_DATA,
+	    "JSRegExp", "data", B_TRUE },
 	{ &V8_OFF_MAP_CONSTRUCTOR,
 	    "Map", "constructor" },
 	{ &V8_OFF_MAP_INOBJECT_PROPERTIES,
@@ -499,6 +503,7 @@ static int jsobj_print_jsobject(uintptr_t, jsobj_print_t *);
 static int jsobj_print_jsarray(uintptr_t, jsobj_print_t *);
 static int jsobj_print_jsfunction(uintptr_t, jsobj_print_t *);
 static int jsobj_print_jsdate(uintptr_t, jsobj_print_t *);
+static int jsobj_print_jsregexp(uintptr_t, jsobj_print_t *);
 
 /*
  * Returns 1 if the V8 version v8_major.v8.minor is strictly older than
@@ -612,6 +617,9 @@ autoconfigure(v8_cfg_t *cfgp)
 		if (strcmp(ep->v8e_name, "JSDate") == 0)
 			V8_TYPE_JSDATE = ep->v8e_value;
 
+		if (strcmp(ep->v8e_name, "JSRegExp") == 0)
+			V8_TYPE_JSREGEXP = ep->v8e_value;
+
 		if (strcmp(ep->v8e_name, "Oddball") == 0)
 			V8_TYPE_ODDBALL = ep->v8e_value;
 	}
@@ -637,16 +645,19 @@ autoconfigure(v8_cfg_t *cfgp)
 	}
 
 	/*
-	 * It's non-fatal if we can't find HeapNumber, JSDate, or Oddball
-	 * because they're only used for heuristics.  It's not even a warning if
-	 * we don't find the Accessor-related fields for the same reason, and
-	 * they change too much to even bother warning.
+	 * It's non-fatal if we can't find HeapNumber, JSDate, JSRegExp, or
+	 * Oddball because they're only used for heuristics.  It's not even a
+	 * warning if we don't find the Accessor-related fields for the same
+	 * reason, and they change too much to even bother warning.
 	 */
 	if (V8_TYPE_HEAPNUMBER == -1)
 		mdb_warn("couldn't find HeapNumber type\n");
 
 	if (V8_TYPE_JSDATE == -1)
 		mdb_warn("couldn't find JSDate type\n");
+
+	if (V8_TYPE_JSREGEXP == -1)
+		mdb_warn("couldn't find JSRegExp type\n");
 
 	if (V8_TYPE_ODDBALL == -1)
 		mdb_warn("couldn't find Oddball type\n");
@@ -1791,7 +1802,7 @@ jsstr_print_seq(uintptr_t addr, uint_t flags, char **bufp, size_t *lenp,
 		 * We don't even have the room to store the ellipsis; zero
 		 * the buffer out and set the length to zero.
 		 */
-		*bufp = '\0';
+		**bufp = '\0';
 		*lenp = 0;
 		return (0);
 	}
@@ -2074,7 +2085,8 @@ jsobj_maybe_garbage(uintptr_t addr)
 	    type != V8_TYPE_JSOBJECT &&
 	    type != V8_TYPE_JSARRAY &&
 	    type != V8_TYPE_JSFUNCTION &&
-	    type != V8_TYPE_JSDATE)));
+	    type != V8_TYPE_JSDATE &&
+	    type != V8_TYPE_JSREGEXP)));
 }
 
 /*
@@ -2900,6 +2912,7 @@ jsobj_print(uintptr_t addr, jsobj_print_t *jsop)
 		{ "JSArray", jsobj_print_jsarray },
 		{ "JSFunction", jsobj_print_jsfunction },
 		{ "JSDate", jsobj_print_jsdate },
+		{ "JSRegExp", jsobj_print_jsregexp },
 		{ NULL }
 	}, *ent;
 
@@ -3297,6 +3310,48 @@ jsobj_print_jsdate(uintptr_t addr, jsobj_print_t *jsop)
 	    (time_t)((long long)numval / MILLISEC));
 	(void) bsnprintf(bufp, lenp, "%lld (%s)", (long long)numval, buf);
 
+	return (0);
+}
+
+static int
+jsobj_print_jsregexp(uintptr_t addr, jsobj_print_t *jsop)
+{
+	char **bufp = jsop->jsop_bufp;
+	size_t *lenp = jsop->jsop_lenp;
+	uintptr_t datap, source;
+	uintptr_t *data;
+	size_t datalen;
+	int source_index = 1;
+
+	if (V8_OFF_JSREGEXP_DATA == -1) {
+		(void) bsnprintf(bufp, lenp, "<JSRegExp>");
+		return (0);
+	}
+
+	if (read_heap_ptr(&datap, addr, V8_OFF_JSREGEXP_DATA) != 0) {
+		(void) bsnprintf(bufp, lenp,
+		    "<JSRegExp (failed to read data)>");
+		return (-1);
+	}
+
+	if (read_heap_array(datap, &data, &datalen, UM_SLEEP | UM_GC) != 0) {
+		(void) bsnprintf(bufp, lenp,
+		    "<JSRegExp (failed to read array)>");
+		return (-1);
+	}
+
+	/*
+	 * The value for "source_index" here is unchanged from Node v0.6 through
+	 * Node v0.12, but should ideally come from v8 debug metadata.
+	 */
+	if (datalen < source_index + 1) {
+		(void) bsnprintf(bufp, lenp, "<JSRegExp (array too small)>");
+		return (-1);
+	}
+
+	source = data[source_index];
+	(void) bsnprintf(bufp, lenp, "JSRegExp: ");
+	(void) jsstr_print(source, JSSTR_QUOTED, bufp, lenp);
 	return (0);
 }
 
