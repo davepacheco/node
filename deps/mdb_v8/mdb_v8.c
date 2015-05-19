@@ -3295,8 +3295,11 @@ jsobj_print_jsdate(uintptr_t addr, jsobj_print_t *jsop)
 		}
 
 		if (strcmp(enum_lookup_str(v8_types, type, ""),
-		    "HeapNumber") != 0)
+		    "HeapNumber") != 0) {
+			(void) bsnprintf(bufp, lenp,
+			    "<JSDate (value has unexpected type)>");
 			return (-1);
+		}
 
 		if (read_heap_double(&numval, value,
 		    V8_OFF_HEAPNUMBER_VALUE) == -1) {
