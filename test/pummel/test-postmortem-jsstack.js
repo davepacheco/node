@@ -39,14 +39,20 @@ var expected;
 var stalloogle = function (str) {
   expected = str;
   os.loadavg();
-  /* Do something else to avoid tail call elimination. */
-  process.stderr.write('');
+  /*
+   * Do something else to avoid tail call elimination, and do it in a "try"
+   * block to avoid inlining.
+   */
+  try { process.stderr.write(''); } catch (ex) {}
 };
 
 var bagnoogle = function (arg0, arg1) {
   stalloogle(arg0 + ' is ' + arg1 + ' except that it is read-only');
-  /* Do something else to avoid tail call elimination. */
-  process.stderr.write('');
+  /*
+   * Do something else to avoid tail call elimination, and do it in a "try"
+   * block to avoid inlining.
+   */
+  try { process.stderr.write(''); } catch (ex) {}
 };
 
 var done = false;
@@ -56,8 +62,11 @@ var doogle = function () {
     setTimeout(doogle, 10);
 
   bagnoogle('The bfs command', '(almost) like ed(1)');
-  /* Do something else to avoid tail call elimination. */
-  process.stderr.write('');
+  /*
+   * Do something else to avoid tail call elimination, and do it in a "try"
+   * block to avoid inlining.
+   */
+  try { process.stderr.write(''); } catch (ex) {}
 };
 
 var spawn = require('child_process').spawn;
